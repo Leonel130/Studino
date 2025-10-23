@@ -1,138 +1,123 @@
-#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
-#include <LedControl.h>
+class PomodoroTimer {
 
-unsigned long ultimoRefrescoLCD = 0;
+  public:
+    enum Estado {
+        ESTUDIO,
+        PAUSA
+    };
+
+    PomodoroTimer(unsigned long duracionEstudio, unsigned long duracionPausa, unsigned long intervaloRefresco) {
+        this->duracionEstudioMS = duracionEstudio;
+        this->duracionPausaMS = duracionPausa;
+        this->intervaloRefrescoMS = intervaloRefresco;
+
+        this->estadoActual = ESTUDIO; // Siempre empezamos con estudio
+        this->activo = false;
+        this->tiempoInicialFase = 0;
+        this->ultimoRefresco = 0;
+    }
+
+    void iniciar() { 
+        this->activo = true;
+        this->tiempoInicialFase = millis();
+        this->ultimoRefresco = this->tiempoInicialFase;
+        
+        Serial.println("\n*** ¡COMIENZA EL ESTUDIO! ***");
+        imprimirTiempoRestante(duracionEstudioMS); // Es redundante, pero es para que el timer se muestre inmediatamente
+    }
+
+    void actualizar() {
+        if (!this->activo) return;
+
+        unsigned long duracionActualMS = (this->estadoActual == ESTUDIO) ? this->duracionEstudioMS : this->duracionPausaMS;
+        unsigned long ahora = millis();
+        unsigned long tiempoTranscurrido = ahora - this->tiempoInicialFase;
+
+        if (tiempoTranscurrido >= duracionActualMS) {
+            Serial.println("--- ¡TEMPORIZADOR FINALIZADO! ---");
+            this->cambiarFase();
+            return; 
+        }
+
+        if (ahora - this->ultimoRefresco >= this->intervaloRefrescoMS) {
+            unsigned long tiempoRestante = duracionActualMS - tiempoTranscurrido;
+            imprimirTiempoRestante(tiempoRestante);
+            this->ultimoRefresco = ahora;
+            // Llamar a la actualización de la pantalla LED acá
+        }
+    }
+
+    void detener(){
+      this->activo = false;
+    }
 
 
-// --- CONFIGURACIÓN LCD I2C ---
-LiquidCrystal_I2C lcd(0x27, 16, 2);  // cambia 0x27 si tu módulo usa otra dirección
+  private:
+    Estado estadoActual;
+    bool activo;
+    unsigned long duracionEstudioMS;
+    unsigned long duracionPausaMS;
+    unsigned long intervaloRefrescoMS;
 
-// --- CONFIGURACIÓN LED MATRIX (MAX7219) ---
-LedControl lc = LedControl(9, 13, 10, 1); // DIN, CLK, CS, #displays
+    unsigned long tiempoInicialFase;
+    unsigned long ultimoRefresco;
 
-// --- PINES ---
-#define BTN_START 7
-#define BTN_RESET 8
-#define SENSOR 6
+    void cambiarFase() {
+        if (this->estadoActual == ESTUDIO) {
+            this->estadoActual = PAUSA;
+            Serial.println("\n*** Transición: ¡COMIENZA LA PAUSA! ***");
+        } else {
+            this->estadoActual = ESTUDIO;
+            Serial.println("\n*** Transición: ¡COMIENZA EL ESTUDIO! ***");
+        }
 
-// --- VARIABLES DE TIEMPO ---
-unsigned long anterior = 0;
-int tiempoEstudio = 25 * 60; // 25 minutos
-int tiempoDescanso = 5 * 60; // 5 minutos
-int tiempoActual = tiempoEstudio;
-bool enEstudio = true;
-bool activo = false;
+        this->tiempoInicialFase = millis();
+        this->ultimoRefresco = this->tiempoInicialFase;
 
-// --- CONTROL SENSOR ---
-unsigned long tiempoUltimaDeteccion = 0;
+        unsigned long duracionNuevaFase = (this->estadoActual == ESTUDIO) ? this->duracionEstudioMS : this->duracionPausaMS;
+        imprimirTiempoRestante(duracionNuevaFase); // Es redundante, pero es para que el timer se muestre inmediatamente
+    }
 
-// --- MATRIZ (ejemplo simple) ---
-byte carita[8] = {
-  B00000000,
-  B01000010,
-  B00000000,
-  B00000000,
-  B01000010,
-  B00111100,
-  B00000000,
-  B00000000
+    void imprimirTiempoRestante(unsigned long ms) {
+        long totalSegundos = ms / 1000;
+        int horas = totalSegundos / 3600;
+        totalSegundos %= 3600;
+        int minutos = totalSegundos / 60;
+        int segundos = totalSegundos % 60;
+
+        Serial.print("Tiempo restante (");
+        Serial.print((this->estadoActual == ESTUDIO) ? "ESTUDIO" : "PAUSA");
+        Serial.print("): ");
+
+        if (horas > 0) {
+            Serial.print(horas);
+            Serial.print(":");
+            if (minutos < 10) Serial.print("0");
+        }
+
+        Serial.print(minutos);
+        Serial.print(":");
+
+        if (segundos < 10) Serial.print("0");
+        Serial.println(segundos);
+    }
 };
 
+
+const unsigned long DURACION_ESTUDIO_MS   = 15000UL; // 15 seg
+const unsigned long DURACION_PAUSA_MS     = 10000UL; // 10 seg
+const unsigned long INTERVALO_REFRESCO_MS = 1000UL;  // 1 seg
+
+PomodoroTimer miTimer(DURACION_ESTUDIO_MS, DURACION_PAUSA_MS, INTERVALO_REFRESCO_MS);
+
+
 void setup() {
-  // LCD
-  lcd.init();
-  lcd.backlight();
-  lcd.setCursor(0, 0);
-  lcd.print("Studino listo!");
-  delay(1000);
-  lcd.clear();
+    Serial.begin(9600);
+    Serial.println("--- Bienvenido a Studino! Tu compañero de estudio :) ---");
 
-  // MATRIZ LED
-  lc.shutdown(0, false);
-  lc.setIntensity(0, 5);
-  lc.clearDisplay(0);
-  mostrarCarita();
-
-  // Pines
-  pinMode(BTN_START, INPUT_PULLUP);
-  pinMode(BTN_RESET, INPUT_PULLUP);
-  pinMode(SENSOR, INPUT);
+    miTimer.iniciar(); // Modificar: Llamar una vez que el usuario defina la duración de los temporizadores  
 }
 
 void loop() {
-  unsigned long ahora = millis();
-
-  leerBotones();
-
-  actualizarTimer(ahora);
-  mostrarLCD();
-}
-
-void leerBotones() {
-  if (digitalRead(BTN_START) == LOW) {
-    activo = !activo;
-    delay(200);
-  }
-
-  if (digitalRead(BTN_RESET) == LOW) {
-    tiempoActual = enEstudio ? tiempoEstudio : tiempoDescanso;
-    activo = false;
-    delay(200);
-  }
-}
-
-
-void actualizarTimer(unsigned long ahora) {
-  if (activo && ahora - anterior >= 1000) {
-    anterior = ahora;
-    tiempoActual--;
-
-    if (tiempoActual <= 0) {
-      cambiarModo();
-    }
-  }
-}
-
-void cambiarModo() {
-  enEstudio = !enEstudio;
-  tiempoActual = enEstudio ? tiempoEstudio : tiempoDescanso;
-
-  lcd.clear();
-  if (enEstudio) lcd.print("Estudia 💪");
-  else lcd.print("Descansa 😌");
-
-  lc.clearDisplay(0);
-  mostrarCarita();
-}
-
-void mostrarLCD() {
-  unsigned long ahora = millis();
-  if (ahora - ultimoRefrescoLCD < 1000) return;  // solo actualiza cada 1 seg
-  ultimoRefrescoLCD = ahora;
-
-  lcd.setCursor(0, 0);
-  lcd.print(enEstudio ? "Estudio:  " : "Descanso: ");
-  lcd.setCursor(0, 1);
-
-  int minutos = tiempoActual / 60;
-  int segundos = tiempoActual % 60;
-
-  // Borramos la línea antes de escribir
-  lcd.print("                ");  
-  lcd.setCursor(0, 1);
-
-  if (minutos < 10) lcd.print('0');
-  lcd.print(minutos);
-  lcd.print(':');
-  if (segundos < 10) lcd.print('0');
-  lcd.print(segundos);
-}
-
-
-
-void mostrarCarita() {
-  for (int i = 0; i < 8; i++) {
-    lc.setRow(0, i, carita[i]);
-  }
+    miTimer.actualizar();
 }
