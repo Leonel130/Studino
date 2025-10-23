@@ -1,6 +1,6 @@
+#include "LedControl.h"
 class PomodoroTimer {
-
-  public:
+public:
     enum Estado {
         ESTUDIO,
         PAUSA
@@ -52,7 +52,7 @@ class PomodoroTimer {
     }
 
 
-  private:
+private:
     Estado estadoActual;
     bool activo;
     unsigned long duracionEstudioMS;
@@ -104,20 +104,136 @@ class PomodoroTimer {
 };
 
 
-const unsigned long DURACION_ESTUDIO_MS   = 15000UL; // 15 seg
-const unsigned long DURACION_PAUSA_MS     = 10000UL; // 10 seg
-const unsigned long INTERVALO_REFRESCO_MS = 1000UL;  // 1 seg
+struct Animation {
+    const byte* data;
+    int numFrames;   
+};
+
+
+class LedAnimator {
+private:
+  LedControl* lc; 
+  const Animation* currentAnimation;
+  int currentFrame;
+  unsigned long frameDurationMS;
+  unsigned long lastFrameTime;
+
+public:
+  LedAnimator(LedControl& ledControl, unsigned long frameDuration) {
+    this->lc = &ledControl;
+    this->frameDurationMS = frameDuration;
+    this->currentAnimation = nullptr;
+    this->currentFrame = 0;
+    this->lastFrameTime = 0;
+  }
+
+  void play(const Animation& anim) {
+    // Evita reiniciar la animación si ya se está reproduciendo
+    if (this->currentAnimation == &anim) return; 
+    
+    this->currentAnimation = &anim;
+    this->currentFrame = 0;
+    this->lastFrameTime = millis();
+    displayCurrentFrame();
+  }
+
+  void stop() {
+    this->currentAnimation = nullptr;
+    this->lc->clearDisplay(0);
+  }
+
+  void actualizar() {
+    if (this->currentAnimation == nullptr) return;
+    unsigned long ahora = millis();
+    if (ahora - this->lastFrameTime >= this->frameDurationMS) {
+      this->currentFrame++;
+      if (this->currentFrame >= this->currentAnimation->numFrames) {
+        this->currentFrame = 0;
+      }
+      displayCurrentFrame();
+      this->lastFrameTime = ahora;
+    }
+  }
+
+private:
+  void displayCurrentFrame() {
+    if (this->currentAnimation == nullptr) return;
+    for (int row = 0; row < 8; row++) {
+      byte rowData = this->currentAnimation->data[this->currentFrame * 8 + row];
+      this->lc->setRow(0, row, rowData);
+    }
+  }
+};
+
+
+//Pines                   DIN, CLK, CS, numDevices
+LedControl lc = LedControl(12, 11, 10, 1);
+
+const unsigned long DURACION_ESTUDIO_MS   = 15000UL;
+const unsigned long DURACION_PAUSA_MS     = 10000UL;
+const unsigned long INTERVALO_REFRESCO_MS = 1000UL;
 
 PomodoroTimer miTimer(DURACION_ESTUDIO_MS, DURACION_PAUSA_MS, INTERVALO_REFRESCO_MS);
+
+const unsigned long FRAME_DURATION_MS = 500UL;
+LedAnimator miAnimador(lc, FRAME_DURATION_MS);
+
+byte animEstudio[16][8] = {
+ {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00001100,B00000000},
+ {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000},
+ {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000},
+ {B00000000,B00000000,B01000010,B00000000,B00000000,B01111110,B00000000,B00000000},
+ {B00000000,B00000000,B01000100,B00000000,B00000010,B00111110,B00000000,B00000000},
+ {B00000000,B00000000,B01000100,B00000000,B00000000,B00011100,B00000000,B00000000},
+ {B00000000,B00000000,B01000100,B00000000,B00000000,B00011100,B00000000,B00000000},
+ {B00000000,B00000000,B01000100,B00000000,B00000000,B00011100,B00000000,B00000000},
+ {B00000000,B00000000,B01000100,B00000000,B00000000,B00011100,B00000100,B00000000},
+ {B00000000,B00000000,B01000100,B00000000,B00000000,B00011100,B00000000,B00000000},
+ {B00000000,B00000000,B01000100,B00000000,B00000000,B00011100,B00000000,B00000000},
+ {B00000000,B00000000,B01000100,B00000000,B00000000,B00111110,B00000000,B00000000},
+ {B00000000,B00000000,B01000010,B00000000,B00000000,B01111110,B00000000,B00000000},
+ {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000},
+ {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000},
+ {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000}
+};
+
+// Animación 2 (Ejemplo de 7 frames)
+byte animPausa[7][8] = {
+ {B00000000,B01111110,B01000010,B01000010,B01000010,B01111110,B00000000,B00000000}, // Z
+ {B00000000,B00000000,B00000010,B00000100,B00001000,B00010000,B00100000,B01000000},
+ {B00000000,B01000000,B00100000,B00010000,B00001000,B00000100,B00000010,B00000000},
+ {B00000000,B00000010,B00000100,B00001000,B00010000,B00100000,B01000000,B00000000},
+ {B00000000,B01000000,B00100000,B00010000,B00001000,B00000100,B00000010,B00000000},
+ {B00000000,B00000010,B00000100,B00001000,B00010000,B00100000,B01000000,B00000000},
+ {B00000000,B01111110,B01000010,B01000010,B01000010,B01111110,B00000000,B00000000}  // Z
+};
+
+Animation ANIM_ESTUDIO = { (const byte*)animEstudio, 16 };
+Animation ANIM_PAUSA   = { (const byte*)animPausa, 7 };
 
 
 void setup() {
     Serial.begin(9600);
     Serial.println("--- Bienvenido a Studino! Tu compañero de estudio :) ---");
 
-    miTimer.iniciar(); // Modificar: Llamar una vez que el usuario defina la duración de los temporizadores  
+    // Inicializar la matriz LED
+    lc.shutdown(0,false); 
+    lc.setIntensity(0,8);
+    lc.clearDisplay(0); 
+
+    miTimer.iniciar(); 
+
+    miAnimador.play(ANIM_ESTUDIO);
 }
 
 void loop() {
     miTimer.actualizar();
+
+    miAnimador.actualizar();
+
+    if (miTimer.getEstado() == PomodoroTimer::ESTUDIO) {
+        miAnimador.play(ANIM_ESTUDIO);
+    } else {
+        miAnimador.play(ANIM_PAUSA);
+    }
 }
