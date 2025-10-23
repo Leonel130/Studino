@@ -1,12 +1,12 @@
 #include "LedControl.h"
-class PomodoroTimer {
+class Timer {
 public:
     enum Estado {
         ESTUDIO,
         PAUSA
     };
 
-    PomodoroTimer(unsigned long duracionEstudio, unsigned long duracionPausa, unsigned long intervaloRefresco) {
+    Timer(unsigned long duracionEstudio, unsigned long duracionPausa, unsigned long intervaloRefresco) {
         this->duracionEstudioMS = duracionEstudio;
         this->duracionPausaMS = duracionPausa;
         this->intervaloRefrescoMS = intervaloRefresco;
@@ -172,7 +172,7 @@ private:
 const unsigned long DURACION_ESTUDIO_MS   = 15000UL;
 const unsigned long DURACION_PAUSA_MS     = 10000UL;
 const unsigned long INTERVALO_REFRESCO_MS = 1000UL;
-PomodoroTimer miTimer(DURACION_ESTUDIO_MS, DURACION_PAUSA_MS, INTERVALO_REFRESCO_MS);
+Timer miTimer(DURACION_ESTUDIO_MS, DURACION_PAUSA_MS, INTERVALO_REFRESCO_MS);
 
 //Pines                   DIN, CLK, CS, numDevices
 LedControl lc = LedControl(12, 11, 10, 1);
@@ -233,7 +233,7 @@ void loop() {
 
     miAnimador.actualizar();
 
-    if (miTimer.getEstado() == PomodoroTimer::ESTUDIO) {
+    if (miTimer.getEstado() == Timer::ESTUDIO) {
         miAnimador.play(ANIM_ESTUDIO);
     } else {
         miAnimador.play(ANIM_PAUSA);
