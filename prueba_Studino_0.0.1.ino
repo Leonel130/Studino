@@ -51,6 +51,9 @@ public:
       this->activo = false;
     }
 
+    Estado getEstado() {
+      return this->estadoActual;
+    }
 
 private:
     Estado estadoActual;
