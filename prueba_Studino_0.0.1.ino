@@ -1,123 +1,305 @@
-class PomodoroTimer {
+#include "LedControl.h"
 
-  public:
-    enum Estado {
+
+class Timer {
+private:
+    unsigned long tiempoInicial;
+    unsigned long duracion;
+    bool activo;
+
+public:
+    Timer() {
+        this->activo = false;
+        this->tiempoInicial = 0;
+        this->duracion = 0;
+    }
+
+    void iniciar(unsigned long duracionMS) {
+        this->duracion = duracionMS;
+        this->tiempoInicial = millis();
+        this->activo = true;
+    }
+
+    void detener() {
+        this->activo = false;
+    }
+
+    // Devuelve 'true' SI TERMINÓ.
+    bool actualizar() {
+        if (!this->activo) return false;
+
+        unsigned long tiempoTranscurrido = millis() - this->tiempoInicial;
+
+        if (tiempoTranscurrido >= this->duracion) {
+            this->activo = false;
+            return true;
+        }
+        
+        return false;
+    }
+};
+
+const unsigned long DURACION_ESTUDIO_MS   = 15000UL;
+const unsigned long DURACION_PAUSA_MS     = 10000UL;
+const unsigned long FRAME_DURATION_MS = 250UL;
+Timer miTimer;
+
+
+struct Animation {
+    const byte* data;
+    int numFrames;   
+};
+
+
+class LedAnimator {
+private:
+  LedControl* lc;
+  
+  const Animation* currentAnimation;
+  int currentFrame;
+  bool looping;
+  
+  unsigned long frameDurationMS;
+  unsigned long lastFrameTime;
+
+public:
+  LedAnimator(LedControl& ledControl, unsigned long frameDuration) {
+    this->lc = &ledControl;
+    this->frameDurationMS = frameDuration;
+    this->currentAnimation = nullptr;
+    this->currentFrame = 0;
+    this->lastFrameTime = 0;
+    this->looping = false;
+  }
+
+  void play(const Animation& anim) {
+    play(anim, true);
+  }
+
+  // Permite elegir si loopea
+  void play(const Animation& anim, bool loop) {
+    if (this->currentAnimation == &anim) return; 
+    
+    this->currentAnimation = &anim;
+    this->currentFrame = 0;
+    this->looping = loop;
+    this->lastFrameTime = millis();
+    displayCurrentFrame();
+  }
+
+  void stop() {
+    this->currentAnimation = nullptr;
+    this->lc->clearDisplay(0);
+  }
+
+  bool isRunning() {
+    return (this->currentAnimation != nullptr);
+  }
+
+  void actualizar() {
+    if (this->currentAnimation == nullptr) return;
+    unsigned long ahora = millis();
+
+    if (ahora - this->lastFrameTime >= this->frameDurationMS) {
+      this->currentFrame++;
+      
+      if (this->currentFrame >= this->currentAnimation->numFrames) {
+        if (this->looping) {
+          this->currentFrame = 0;
+        } else {
+          this->currentAnimation = nullptr; 
+          return;
+        }
+      }
+      displayCurrentFrame();
+      this->lastFrameTime = ahora;
+    }
+  }
+
+private:
+  void displayCurrentFrame() {
+    if (this->currentAnimation == nullptr) return;
+    for (int row = 0; row < 8; row++) {
+      byte rowData = this->currentAnimation->data[this->currentFrame * 8 + row];
+      this->lc->setRow(0, row, rowData);
+    }
+  }
+};
+
+
+byte animInicioData[6][8] = {
+    {B00000000,B00000000,B00000000,B00000000,B00000000,B00000000,B00000000,B00000000},
+    {B00000000,B01100000,B01000000,B01100000,B01000000,B01000000,B00000000,B00000000},
+    {B00000000,B01100000,B01000000,B01100000,B01000000,B01000000,B00000000,B00000000},
+    {B00000000,B01100010,B01000010,B01100010,B01000010,B01000010,B00000000,B00000000},
+    {B00000000,B01100010,B01000010,B01100010,B01000010,B01000010,B00000000,B00000000},
+    {B00000000,B01100010,B01000010,B01100010,B01000010,B01000010,B00000000,B00000000}
+};
+byte animEngranaje[4][8] = {
+    {B00111100,B01100110,B11000011,B10011001,B10011001,B11000011,B01100110,B00111100},
+    {B00011000,B01011010,B01100110,B10011001,B01100110,B01011010,B00011000,B00000000},
+    {B00111100,B01100110,B11000011,B10011001,B10011001,B11000011,B01100110,B00111100},
+    {B00011000,B01011010,B01100110,B10011001,B01100110,B01011010,B00011000,B00000000}
+};
+byte animEstudio[16][8] = {
+    {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00001100,B00000000},
+    {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000},
+    {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000},
+    {B00000000,B00000000,B01000010,B00000000,B00000000,B01111110,B00000000,B00000000},
+    {B00000000,B00000000,B01000100,B00000000,B00000010,B00111110,B00000000,B00000000},
+    {B00000000,B00000000,B01000100,B00000000,B00000000,B00011100,B00000000,B00000000},
+    {B00000000,B00000000,B01000100,B00000000,B00000000,B00011100,B00000000,B00000000},
+    {B00000000,B00000000,B01000100,B00000000,B00000000,B00011100,B00000000,B00000000},
+    {B00000000,B00000000,B01000100,B00000000,B00000000,B00011100,B00000100,B00000000},
+    {B00000000,B00000000,B01000100,B00000000,B00000000,B00011100,B00000000,B00000000},
+    {B00000000,B00000000,B01000100,B00000000,B00000000,B00011100,B00000000,B00000000},
+    {B00000000,B00000000,B01000100,B00000000,B00000000,B00111110,B00000000,B00000000},
+    {B00000000,B00000000,B01000010,B00000000,B00000000,B01111110,B00000000,B00000000},
+    {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000},
+    {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000},
+    {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000}
+};
+byte animPausa[8][8] = {
+    {B01111110,B01000010,B01011010,B01011010,B01011010,B01000010,B01111110,B00000000},
+    {B01111110,B01000010,B01010010,B01011010,B01011010,B01000010,B01111110,B00000000},
+    {B01111110,B01000010,B01000010,B01011010,B01110010,B01000010,B01111110,B00000000},
+    {B01111110,B01000010,B01000010,B01010010,B01101010,B01000010,B01111110,B00000000},
+    {B01111110,B01000010,B01000010,B01000010,B01111010,B01000010,B01111110,B00000000},
+    {B01111110,B01000010,B01000010,B01000010,B01111110,B01000010,B01111110,B00000000},
+    {B01111110,B00100100,B00011000,B00011000,B00011000,B00100100,B01111110,B00000000},
+    {B01111110,B01000010,B01111110,B01111110,B01000010,B01000010,B01111110,B00000000}
+};
+
+LedControl lc = LedControl(12, 11, 10, 1); // DIN, CLK, CS, numDevices
+LedAnimator miAnimador(lc, FRAME_DURATION_MS);
+Animation ANIM_INICIO    = { (const byte*)animInicioData, 6 };
+Animation ANIM_ENGRANAJE = { (const byte*)animEngranaje, 4 };
+Animation ANIM_ESTUDIO = { (const byte*)animEstudio, 16 };
+Animation ANIM_PAUSA   = { (const byte*)animPausa, 8 };
+
+
+class AppController {
+public:
+    enum AppEstado {
+        INICIALIZANDO,
+        CONFIGURACION,
         ESTUDIO,
         PAUSA
     };
 
-    PomodoroTimer(unsigned long duracionEstudio, unsigned long duracionPausa, unsigned long intervaloRefresco) {
-        this->duracionEstudioMS = duracionEstudio;
-        this->duracionPausaMS = duracionPausa;
-        this->intervaloRefrescoMS = intervaloRefresco;
+private:
+    AppEstado estadoActual;
 
-        this->estadoActual = ESTUDIO; // Siempre empezamos con estudio
-        this->activo = false;
-        this->tiempoInicialFase = 0;
-        this->ultimoRefresco = 0;
+    Timer* timer;
+    LedAnimator* animador;
+
+    unsigned long duracionEstudioMS;
+    unsigned long duracionPausaMS;
+
+public:
+    AppController(Timer& timer, LedAnimator& animador, unsigned long estudioMS, unsigned long pausaMS) {
+        this->timer = &timer;
+        this->animador = &animador;
+        this->duracionEstudioMS = estudioMS;
+        this->duracionPausaMS = pausaMS;
+        
+        this->estadoActual = INICIALIZANDO; // Estado inicial por defecto
     }
 
-    void iniciar() { 
-        this->activo = true;
-        this->tiempoInicialFase = millis();
-        this->ultimoRefresco = this->tiempoInicialFase;
-        
-        Serial.println("\n*** ¡COMIENZA EL ESTUDIO! ***");
-        imprimirTiempoRestante(duracionEstudioMS); // Es redundante, pero es para que el timer se muestre inmediatamente
+    void iniciar() {
+        transicionarA(INICIALIZANDO);
+    }
+    
+    void iniciarSesionEstudio() {
+        if (this->estadoActual == CONFIGURACION) {
+            transicionarA(ESTUDIO);
+        }
     }
 
     void actualizar() {
-        if (!this->activo) return;
+        this->animador->actualizar();
+        bool timerHaTerminado = this->timer->actualizar();
 
-        unsigned long duracionActualMS = (this->estadoActual == ESTUDIO) ? this->duracionEstudioMS : this->duracionPausaMS;
-        unsigned long ahora = millis();
-        unsigned long tiempoTranscurrido = ahora - this->tiempoInicialFase;
+        switch (this->estadoActual) {
+            case INICIALIZANDO:
+                if (!this->animador->isRunning()) {
+                    transicionarA(CONFIGURACION);
+                }
+                break;
+            
+            case CONFIGURACION:
+                break;
 
-        if (tiempoTranscurrido >= duracionActualMS) {
-            Serial.println("--- ¡TEMPORIZADOR FINALIZADO! ---");
-            this->cambiarFase();
-            return; 
-        }
+            case ESTUDIO:
+                if (timerHaTerminado) {
+                    transicionarA(PAUSA);
+                }
+                break;
 
-        if (ahora - this->ultimoRefresco >= this->intervaloRefrescoMS) {
-            unsigned long tiempoRestante = duracionActualMS - tiempoTranscurrido;
-            imprimirTiempoRestante(tiempoRestante);
-            this->ultimoRefresco = ahora;
-            // Llamar a la actualización de la pantalla LED acá
+            case PAUSA:
+                if (timerHaTerminado) {
+                    transicionarA(ESTUDIO);
+                }
+                break;
         }
     }
 
-    void detener(){
-      this->activo = false;
-    }
+private:
+    void transicionarA(AppEstado nuevoEstado) {
+        this->estadoActual = nuevoEstado;
+        Serial.print("\n[AppController] Transición a: ");
 
+        switch (nuevoEstado) {
+            case INICIALIZANDO:
+                Serial.println("INICIALIZANDO");
+                this->timer->detener();
+                this->animador->play(ANIM_INICIO, false); // false = NO loop
+                break;
+            
+            case CONFIGURACION:
+                Serial.println("CONFIGURACION");
+                this->timer->detener();
+                this->animador->play(ANIM_ENGRANAJE, true);
+                break;
 
-  private:
-    Estado estadoActual;
-    bool activo;
-    unsigned long duracionEstudioMS;
-    unsigned long duracionPausaMS;
-    unsigned long intervaloRefrescoMS;
+            case ESTUDIO:
+                Serial.println("ESTUDIO");
+                this->animador->play(ANIM_ESTUDIO, true);
+                this->timer->iniciar(this->duracionEstudioMS);
+                break;
 
-    unsigned long tiempoInicialFase;
-    unsigned long ultimoRefresco;
-
-    void cambiarFase() {
-        if (this->estadoActual == ESTUDIO) {
-            this->estadoActual = PAUSA;
-            Serial.println("\n*** Transición: ¡COMIENZA LA PAUSA! ***");
-        } else {
-            this->estadoActual = ESTUDIO;
-            Serial.println("\n*** Transición: ¡COMIENZA EL ESTUDIO! ***");
+            case PAUSA:
+                Serial.println("PAUSA");
+                this->animador->play(ANIM_PAUSA, true);
+                this->timer->iniciar(this->duracionPausaMS);
+                break;
         }
-
-        this->tiempoInicialFase = millis();
-        this->ultimoRefresco = this->tiempoInicialFase;
-
-        unsigned long duracionNuevaFase = (this->estadoActual == ESTUDIO) ? this->duracionEstudioMS : this->duracionPausaMS;
-        imprimirTiempoRestante(duracionNuevaFase); // Es redundante, pero es para que el timer se muestre inmediatamente
-    }
-
-    void imprimirTiempoRestante(unsigned long ms) {
-        long totalSegundos = ms / 1000;
-        int horas = totalSegundos / 3600;
-        totalSegundos %= 3600;
-        int minutos = totalSegundos / 60;
-        int segundos = totalSegundos % 60;
-
-        Serial.print("Tiempo restante (");
-        Serial.print((this->estadoActual == ESTUDIO) ? "ESTUDIO" : "PAUSA");
-        Serial.print("): ");
-
-        if (horas > 0) {
-            Serial.print(horas);
-            Serial.print(":");
-            if (minutos < 10) Serial.print("0");
-        }
-
-        Serial.print(minutos);
-        Serial.print(":");
-
-        if (segundos < 10) Serial.print("0");
-        Serial.println(segundos);
     }
 };
 
+AppController app(miTimer, miAnimador, DURACION_ESTUDIO_MS, FRAME_DURATION_MS);
 
-const unsigned long DURACION_ESTUDIO_MS   = 15000UL; // 15 seg
-const unsigned long DURACION_PAUSA_MS     = 10000UL; // 10 seg
-const unsigned long INTERVALO_REFRESCO_MS = 1000UL;  // 1 seg
 
-PomodoroTimer miTimer(DURACION_ESTUDIO_MS, DURACION_PAUSA_MS, INTERVALO_REFRESCO_MS);
 
 
 void setup() {
     Serial.begin(9600);
     Serial.println("--- Bienvenido a Studino! Tu compañero de estudio :) ---");
 
-    miTimer.iniciar(); // Modificar: Llamar una vez que el usuario defina la duración de los temporizadores  
+    // Inicializar la matriz LED
+    lc.shutdown(0,false); 
+    lc.setIntensity(0,8);
+    lc.clearDisplay(0); 
+
+    app.iniciar();
+
+    delay(3000); //Poner lógica para la configuración
+
+    miAnimador.play(ANIM_INICIO);
+
+    app.iniciarSesionEstudio();
 }
 
 void loop() {
-    miTimer.actualizar();
+    app.actualizar();
 }
