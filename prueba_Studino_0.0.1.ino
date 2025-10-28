@@ -87,6 +87,10 @@ public:
     this->lc->clearDisplay(0);
   }
 
+  bool isRunning() {
+    return (this->currentAnimation != nullptr);
+  }
+
   void actualizar() {
     if (this->currentAnimation == nullptr) return;
     unsigned long ahora = millis();
