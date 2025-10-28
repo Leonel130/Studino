@@ -1,108 +1,41 @@
 #include "LedControl.h"
+
+
 class Timer {
-public:
-    enum Estado {
-        ESTUDIO,
-        PAUSA
-    };
-
-    Timer(unsigned long duracionEstudio, unsigned long duracionPausa, unsigned long intervaloRefresco) {
-        this->duracionEstudioMS = duracionEstudio;
-        this->duracionPausaMS = duracionPausa;
-        this->intervaloRefrescoMS = intervaloRefresco;
-
-        this->estadoActual = ESTUDIO; // Siempre empezamos con estudio
-        this->activo = false;
-        this->tiempoInicialFase = 0;
-        this->ultimoRefresco = 0;
-    }
-
-    void iniciar() { 
-        this->activo = true;
-        this->tiempoInicialFase = millis();
-        this->ultimoRefresco = this->tiempoInicialFase;
-        
-        Serial.println("\n*** ¡COMIENZA EL ESTUDIO! ***");
-        imprimirTiempoRestante(duracionEstudioMS); // Es redundante, pero es para que el timer se muestre inmediatamente
-    }
-
-    void actualizar() {
-        if (!this->activo) return;
-
-        unsigned long duracionActualMS = (this->estadoActual == ESTUDIO) ? this->duracionEstudioMS : this->duracionPausaMS;
-        unsigned long ahora = millis();
-        unsigned long tiempoTranscurrido = ahora - this->tiempoInicialFase;
-
-        if (tiempoTranscurrido >= duracionActualMS) {
-            Serial.println("--- ¡TEMPORIZADOR FINALIZADO! ---");
-            this->cambiarFase();
-            return; 
-        }
-
-        if (ahora - this->ultimoRefresco >= this->intervaloRefrescoMS) {
-            unsigned long tiempoRestante = duracionActualMS - tiempoTranscurrido;
-            imprimirTiempoRestante(tiempoRestante);
-            this->ultimoRefresco = ahora;
-            // Llamar a la actualización de la pantalla LED acá
-        }
-    }
-
-    void detener(){
-      this->activo = false;
-    }
-
-    Estado getEstado() {
-      return this->estadoActual;
-    }
-
 private:
-    Estado estadoActual;
+    unsigned long tiempoInicial;
+    unsigned long duracion;
     bool activo;
-    unsigned long duracionEstudioMS;
-    unsigned long duracionPausaMS;
-    unsigned long intervaloRefrescoMS;
 
-    unsigned long tiempoInicialFase;
-    unsigned long ultimoRefresco;
-
-    void cambiarFase() {
-        if (this->estadoActual == ESTUDIO) {
-            this->estadoActual = PAUSA;
-            Serial.println("\n*** Transición: ¡COMIENZA LA PAUSA! ***");
-        } else {
-            this->estadoActual = ESTUDIO;
-            Serial.println("\n*** Transición: ¡COMIENZA EL ESTUDIO! ***");
-        }
-
-        this->tiempoInicialFase = millis();
-        this->ultimoRefresco = this->tiempoInicialFase;
-
-        unsigned long duracionNuevaFase = (this->estadoActual == ESTUDIO) ? this->duracionEstudioMS : this->duracionPausaMS;
-        imprimirTiempoRestante(duracionNuevaFase); // Es redundante, pero es para que el timer se muestre inmediatamente
+public:
+    Timer() {
+        this->activo = false;
+        this->tiempoInicial = 0;
+        this->duracion = 0;
     }
 
-    void imprimirTiempoRestante(unsigned long ms) {
-        long totalSegundos = ms / 1000;
-        int horas = totalSegundos / 3600;
-        totalSegundos %= 3600;
-        int minutos = totalSegundos / 60;
-        int segundos = totalSegundos % 60;
+    void iniciar(unsigned long duracionMS) {
+        this->duracion = duracionMS;
+        this->tiempoInicial = millis();
+        this->activo = true;
+    }
 
-        Serial.print("Tiempo restante (");
-        Serial.print((this->estadoActual == ESTUDIO) ? "ESTUDIO" : "PAUSA");
-        Serial.print("): ");
+    void detener() {
+        this->activo = false;
+    }
 
-        if (horas > 0) {
-            Serial.print(horas);
-            Serial.print(":");
-            if (minutos < 10) Serial.print("0");
+    // Devuelve 'true' SI TERMINÓ.
+    bool actualizar() {
+        if (!this->activo) return false;
+
+        unsigned long tiempoTranscurrido = millis() - this->tiempoInicial;
+
+        if (tiempoTranscurrido >= this->duracion) {
+            this->activo = false;
+            return true;
         }
-
-        Serial.print(minutos);
-        Serial.print(":");
-
-        if (segundos < 10) Serial.print("0");
-        Serial.println(segundos);
+        
+        return false;
     }
 };
 
@@ -115,9 +48,12 @@ struct Animation {
 
 class LedAnimator {
 private:
-  LedControl* lc; 
+  LedControl* lc;
+  
   const Animation* currentAnimation;
   int currentFrame;
+  bool looping;
+  
   unsigned long frameDurationMS;
   unsigned long lastFrameTime;
 
@@ -128,14 +64,20 @@ public:
     this->currentAnimation = nullptr;
     this->currentFrame = 0;
     this->lastFrameTime = 0;
+    this->looping = false;
   }
 
   void play(const Animation& anim) {
-    // Evita reiniciar la animación si ya se está reproduciendo
+    play(anim, true);
+  }
+
+  // Permite elegir si loopea
+  void play(const Animation& anim, bool loop) {
     if (this->currentAnimation == &anim) return; 
     
     this->currentAnimation = &anim;
     this->currentFrame = 0;
+    this->looping = loop;
     this->lastFrameTime = millis();
     displayCurrentFrame();
   }
@@ -148,10 +90,17 @@ public:
   void actualizar() {
     if (this->currentAnimation == nullptr) return;
     unsigned long ahora = millis();
+
     if (ahora - this->lastFrameTime >= this->frameDurationMS) {
       this->currentFrame++;
+      
       if (this->currentFrame >= this->currentAnimation->numFrames) {
-        this->currentFrame = 0;
+        if (this->looping) {
+          this->currentFrame = 0;
+        } else {
+          this->currentAnimation = nullptr; 
+          return;
+        }
       }
       displayCurrentFrame();
       this->lastFrameTime = ahora;
@@ -169,22 +118,115 @@ private:
 };
 
 
-const unsigned long DURACION_ESTUDIO_MS   = 15000UL;
-const unsigned long DURACION_PAUSA_MS     = 10000UL;
-const unsigned long INTERVALO_REFRESCO_MS = 1000UL;
-Timer miTimer(DURACION_ESTUDIO_MS, DURACION_PAUSA_MS, INTERVALO_REFRESCO_MS);
+class AppController {
+public:
+    enum AppEstado {
+        INICIALIZANDO,
+        CONFIGURACION,
+        ESTUDIO,
+        PAUSA
+    };
 
-//Pines                   DIN, CLK, CS, numDevices
-LedControl lc = LedControl(12, 11, 10, 1);
-const unsigned long FRAME_DURATION_MS = 500UL;
-LedAnimator miAnimador(lc, FRAME_DURATION_MS);
-byte animInicio[6][8] = {
+private:
+    AppEstado estadoActual;
+
+    Timer* timer;
+    LedAnimator* animador;
+
+    unsigned long duracionEstudioMS;
+    unsigned long duracionPausaMS;
+
+public:
+    AppController(Timer& timer, LedAnimator& animador, unsigned long estudioMS, unsigned long pausaMS) {
+        this->timer = &timer;
+        this->animador = &animador;
+        this->duracionEstudioMS = estudioMS;
+        this->duracionPausaMS = pausaMS;
+        
+        this->estadoActual = INICIALIZANDO; // Estado inicial por defecto
+    }
+
+    void iniciar() {
+        transicionarA(INICIALIZANDO);
+    }
+    
+    void iniciarSesionEstudio() {
+        if (this->estadoActual == CONFIGURACION) {
+            transicionarA(ESTUDIO);
+        }
+    }
+
+    void actualizar() {
+        this->animador->actualizar();
+        bool timerHaTerminado = this->timer->actualizar();
+
+        switch (this->estadoActual) {
+            case INICIALIZANDO:
+                if (!this->animador->isRunning()) {
+                    transicionarA(CONFIGURACION);
+                }
+                break;
+            case CONFIGURACION:
+                break;
+            case ESTUDIO:
+                if (timerHaTerminado) {
+                    transicionarA(PAUSA);
+                }
+                break;
+            case PAUSA:
+                if (timerHaTerminado) {
+                    transicionarA(ESTUDIO);
+                }
+                break;
+        }
+    }
+
+private:
+    void transicionarA(AppEstado nuevoEstado) {
+        this->estadoActual = nuevoEstado;
+        Serial.print("\n[AppController] Transición a: ");
+
+        switch (nuevoEstado) {
+            case INICIALIZANDO:
+                Serial.println("INICIALIZANDO");
+                this->timer->detener();
+                this->animador->play(ANIM_INICIO, false); // false = NO loop
+                break;
+            
+            case CONFIGURACION:
+                Serial.println("CONFIGURACION");
+                this->timer->detener();
+                this->animador->play(ANIM_ENGRANAJE, true);
+                break;
+
+            case ESTUDIO:
+                Serial.println("ESTUDIO");
+                this->animador->play(ANIM_ESTUDIO, true);
+                this->timer->iniciar(this->duracionEstudioMS);
+                break;
+
+            case PAUSA:
+                Serial.println("PAUSA");
+                this->animador->play(ANIM_PAUSA, true);
+                this->timer->iniciar(this->duracionPausaMS);
+                break;
+        }
+    }
+};
+
+byte animInicioData[6][8] = {
     {B00000000,B00000000,B00000000,B00000000,B00000000,B00000000,B00000000,B00000000},
     {B00000000,B01100000,B01000000,B01100000,B01000000,B01000000,B00000000,B00000000},
     {B00000000,B01100000,B01000000,B01100000,B01000000,B01000000,B00000000,B00000000},
     {B00000000,B01100010,B01000010,B01100010,B01000010,B01000010,B00000000,B00000000},
     {B00000000,B01100010,B01000010,B01100010,B01000010,B01000010,B00000000,B00000000},
     {B00000000,B01100010,B01000010,B01100010,B01000010,B01000010,B00000000,B00000000}
+};
+byte animEngranaje[4][8] = {
+  {B00111100,B01100110,B11000011,B10011001,B10011001,B11000011,B01100110,B00111100},
+  {B00011000,B01011010,B01100110,B10011001,B01100110,B01011010,B00011000,B00000000},
+  {B00111100,B01100110,B11000011,B10011001,B10011001,B11000011,B01100110,B00111100},
+  {B00011000,B01011010,B01100110,B10011001,B01100110,B01011010,B00011000,B00000000}
 };
 byte animEstudio[16][8] = {
     {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00001100,B00000000},
@@ -215,9 +257,19 @@ byte animPausa[8][8] = {
     {B01111110,B01000010,B01111110,B01111110,B01000010,B01000010,B01111110,B00000000}
 };
 
-Animation ANIM_INICIO = { (const byte*)animInicio, 6 };
+const unsigned long DURACION_ESTUDIO_MS   = 15000UL;
+const unsigned long DURACION_PAUSA_MS     = 10000UL;
+const unsigned long INTERVALO_REFRESCO_MS = 1000UL;
+
+LedControl lc = LedControl(12, 11, 10, 1); // DIN, CLK, CS, numDevices
+Timer miTimer;
+LedAnimator miAnimador(lc, FRAME_DURATION_MS);
+AppController app(miTimer, miAnimador, DURACION_ESTUDIO_MS, DURACION_PAUSA_MS);
+
+Animation ANIM_INICIO    = { (const byte*)animInicioData, 6 };
+Animation ANIM_ENGRANAJE = { (const byte*)animEngranaje, 4 };
 Animation ANIM_ESTUDIO = { (const byte*)animEstudio, 16 };
-Animation ANIM_PAUSA   = { (const byte*)animPausa, 7 };
+Animation ANIM_PAUSA   = { (const byte*)animPausa, 8 };
 
 
 void setup() {
@@ -229,18 +281,15 @@ void setup() {
     lc.setIntensity(0,8);
     lc.clearDisplay(0); 
 
+    app.iniciar();
+
+    delay(3000); //Poner lógica para la configuración
+
     miAnimador.play(ANIM_INICIO);
-    miTimer.iniciar(); 
+
+    app.iniciarSesionEstudio();
 }
 
 void loop() {
-    miTimer.actualizar();
-
-    miAnimador.actualizar();
-
-    if (miTimer.getEstado() == Timer::ESTUDIO) {
-        miAnimador.play(ANIM_ESTUDIO);
-    } else {
-        miAnimador.play(ANIM_PAUSA);
-    }
+    app.actualizar();
 }
