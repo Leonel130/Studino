@@ -166,13 +166,16 @@ public:
                     transicionarA(CONFIGURACION);
                 }
                 break;
+            
             case CONFIGURACION:
                 break;
+
             case ESTUDIO:
                 if (timerHaTerminado) {
                     transicionarA(PAUSA);
                 }
                 break;
+
             case PAUSA:
                 if (timerHaTerminado) {
                     transicionarA(ESTUDIO);
@@ -259,12 +262,12 @@ byte animPausa[8][8] = {
 
 const unsigned long DURACION_ESTUDIO_MS   = 15000UL;
 const unsigned long DURACION_PAUSA_MS     = 10000UL;
-const unsigned long INTERVALO_REFRESCO_MS = 1000UL;
+const unsigned long FRAME_DURATION_MS = 250UL;
 
 LedControl lc = LedControl(12, 11, 10, 1); // DIN, CLK, CS, numDevices
 Timer miTimer;
 LedAnimator miAnimador(lc, FRAME_DURATION_MS);
-AppController app(miTimer, miAnimador, DURACION_ESTUDIO_MS, DURACION_PAUSA_MS);
+AppController app(miTimer, miAnimador, DURACION_ESTUDIO_MS, FRAME_DURATION_MS);
 
 Animation ANIM_INICIO    = { (const byte*)animInicioData, 6 };
 Animation ANIM_ENGRANAJE = { (const byte*)animEngranaje, 4 };
