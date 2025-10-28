@@ -2,7 +2,30 @@
 #include <LiquidCrystal_I2C.h>
 #include "LedControl.h"
 
-LiquidCrystal_I2C lcd(0x27, 16, 2)
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+LedControl lc = LedControl(12, 11, 10, 1); // DIN, CLK, CS, numDevices
+
+const int PIN_VERDE = 7; // Suma / "Si"
+const int PIN_ROJO  = 6; // Resta / "No"
+const int PIN_NEGRO = 5; // Confirmar / Cancelar
+
+unsigned long DURACION_ESTUDIO_MS_DEFECTO = 70000UL;
+unsigned long DURACION_PAUSA_MS_DEFECTO   = 70000UL;
+const unsigned long FRAME_DURATION_MS     = 1000UL;
+
+const unsigned int MAX_ESTUDIO_MIN = 60;
+const unsigned int MAX_PAUSA_MIN   = 30;
+const unsigned int STEP_MIN        = 5;
+const unsigned long DEBOUNCE_MS    = 200;
+
+const unsigned long INTERVALO_REFRESCO_LCD_MS = 1000;
+
+
+struct Animation {
+  const byte* data;
+  int numFrames;
+};
+
 
 class Timer {
 private:
@@ -27,43 +50,45 @@ public:
         this->activo = false;
     }
 
-    // Devuelve 'true' SI TERMINÓ.
     bool actualizar() {
         if (!this->activo) return false;
-
         unsigned long tiempoTranscurrido = millis() - this->tiempoInicial;
-
         if (tiempoTranscurrido >= this->duracion) {
             this->activo = false;
             return true;
         }
-        
         return false;
     }
-};
 
-const unsigned long DURACION_ESTUDIO_MS   = 15000UL;
-const unsigned long DURACION_PAUSA_MS     = 10000UL;
-const unsigned long FRAME_DURATION_MS = 250UL;
-Timer miTimer;
-
-
-struct Animation {
-    const byte* data;
-    int numFrames;   
+    unsigned long getTiempoRestanteMS() {
+        if (!this->activo) {
+            return 0;
+        }
+        unsigned long tiempoTranscurrido = millis() - this->tiempoInicial;
+        if (tiempoTranscurrido >= this->duracion) {
+            return 0;
+        }
+        return this->duracion - tiempoTranscurrido;
+    }
 };
 
 
 class LedAnimator {
 private:
   LedControl* lc;
-  
   const Animation* currentAnimation;
   int currentFrame;
   bool looping;
-  
   unsigned long frameDurationMS;
   unsigned long lastFrameTime;
+
+  void displayCurrentFrame() {
+    if (this->currentAnimation == nullptr) return;
+    for (int row = 0; row < 8; row++) {
+      byte rowData = this->currentAnimation->data[this->currentFrame * 8 + row];
+      this->lc->setRow(0, row, rowData);
+    }
+  }
 
 public:
   LedAnimator(LedControl& ledControl, unsigned long frameDuration) {
@@ -75,14 +100,10 @@ public:
     this->looping = false;
   }
 
-  void play(const Animation& anim) {
-    play(anim, true);
-  }
+  void play(const Animation& anim) { play(anim, true); }
 
-  // Permite elegir si loopea
   void play(const Animation& anim, bool loop) {
-    if (this->currentAnimation == &anim) return; 
-    
+    if (this->currentAnimation == &anim) return;
     this->currentAnimation = &anim;
     this->currentFrame = 0;
     this->looping = loop;
@@ -102,15 +123,13 @@ public:
   void actualizar() {
     if (this->currentAnimation == nullptr) return;
     unsigned long ahora = millis();
-
     if (ahora - this->lastFrameTime >= this->frameDurationMS) {
       this->currentFrame++;
-      
       if (this->currentFrame >= this->currentAnimation->numFrames) {
         if (this->looping) {
           this->currentFrame = 0;
         } else {
-          this->currentAnimation = nullptr; 
+          this->currentAnimation = nullptr;
           return;
         }
       }
@@ -118,26 +137,310 @@ public:
       this->lastFrameTime = ahora;
     }
   }
-
-private:
-  void displayCurrentFrame() {
-    if (this->currentAnimation == nullptr) return;
-    for (int row = 0; row < 8; row++) {
-      byte rowData = this->currentAnimation->data[this->currentFrame * 8 + row];
-      this->lc->setRow(0, row, rowData);
-    }
-  }
 };
 
-    void setDuraciones(unsigned long nuevaDuracionEstudio, unsigned long nuevaDuracionPausa) {
-        this->duracionEstudioMS = nuevaDuracionEstudio;
-        this->duracionPausaMS   = nuevaDuracionPausa;
 
-        // Reinicia el timer a la nueva duración si querés:
-        this->tiempoInicialFase = millis();
-        this->ultimoRefresco = millis();
-        this->estadoActual = ESTUDIO; // opcional: comenzar siempre en estudio
+class AppController {
+public:
+    enum AppEstado {
+        INICIALIZANDO,
+        CONFIGURACION,
+        SESION_ESTUDIO,
+        SESION_PAUSA
+    };
+    enum MenuEstado {
+        CONFIG_ESTUDIO,
+        CONFIG_DESCANSO,
+        CONFIRMACION
+    };
+
+private:
+    AppEstado estadoActual;
+    MenuEstado menuEstadoActual;
+
+    Timer* timer;
+    LedAnimator* animador;
+    LiquidCrystal_I2C* lcd;
+
+    unsigned long duracionEstudioMS;
+    unsigned long duracionPausaMS;
+    int minutosEstudio;
+    int minutosPausa;
+
+    int pinSuma, pinResta, pinConfirma;
+    unsigned long lastSuma, lastResta, lastConfirma;
+
+    const Animation *animInicio, *animConfig, *animEstudio, *animPausa;
+
+    unsigned long ultimoRefrescoLCD;
+
+public:
+    AppController(Timer& timer, LedAnimator& animador, LiquidCrystal_I2C& lcd,
+                  int pinSuma, int pinResta, int pinConfirma,
+                  unsigned long estudioDefectoMS, unsigned long pausaDefectoMS,
+                  const Animation& animInicio, const Animation& animConfig,
+                  const Animation& animEstudio, const Animation& animPausa) {
+        
+        this->timer = &timer;
+        this->animador = &animador;
+        this->lcd = &lcd;
+        
+        this->pinSuma = pinSuma;
+        this->pinResta = pinResta;
+        this->pinConfirma = pinConfirma;
+
+        this->duracionEstudioMS = estudioDefectoMS;
+        this->duracionPausaMS = pausaDefectoMS;
+        
+        this->minutosEstudio = estudioDefectoMS / 60000UL;
+        this->minutosPausa = pausaDefectoMS / 60000UL;
+
+        this->animInicio = &animInicio;
+        this->animConfig = &animConfig;
+        this->animEstudio = &animEstudio;
+        this->animPausa = &animPausa;
+
+        this->estadoActual = INICIALIZANDO;
+        this->menuEstadoActual = CONFIG_ESTUDIO;
+        
+        this->lastSuma = 0; this->lastResta = 0; this->lastConfirma = 0;
+        this->ultimoRefrescoLCD = 0;
     }
+
+    void iniciar() {
+        pinMode(pinSuma, INPUT_PULLUP);
+        pinMode(pinResta, INPUT_PULLUP);
+        pinMode(pinConfirma, INPUT_PULLUP);
+        
+        this->lcd->init();
+        this->lcd->backlight();
+
+        transicionarA(INICIALIZANDO);
+    }
+
+    void actualizar() {
+        this->animador->actualizar();
+        bool timerHaTerminado = this->timer->actualizar();
+
+        unsigned long ahora = millis();
+        bool btnSuma = (digitalRead(pinSuma) == LOW && ahora - lastSuma > DEBOUNCE_MS);
+        bool btnResta = (digitalRead(pinResta) == LOW && ahora - lastResta > DEBOUNCE_MS);
+        bool btnConfirma = (digitalRead(pinConfirma) == LOW && ahora - lastConfirma > DEBOUNCE_MS);
+
+        if (btnSuma) lastSuma = ahora;
+        if (btnResta) lastResta = ahora;
+        if (btnConfirma) lastConfirma = ahora;
+
+        switch (this->estadoActual) {
+            case INICIALIZANDO:
+                if (!this->animador->isRunning()) {
+                    transicionarA(CONFIGURACION);
+                }
+                break;
+            case CONFIGURACION:
+                gestionarMenuConfiguracion(btnSuma, btnResta, btnConfirma);
+                break;
+            
+            case SESION_ESTUDIO:
+                if (timerHaTerminado) {
+                    transicionarA(SESION_PAUSA);
+                } else if (btnConfirma) {
+                    Serial.println("\n[AppController] Sesión cancelada. Volviendo a Configuración.");
+                    transicionarA(CONFIGURACION);
+                } else {
+                    gestionarRefrescoLCD();
+                }
+                break;
+            
+            case SESION_PAUSA:
+                if (timerHaTerminado) {
+                    transicionarA(SESION_ESTUDIO);
+                } else if (btnConfirma) {
+                    Serial.println("\n[AppController] Sesión cancelada. Volviendo a Configuración.");
+                    transicionarA(CONFIGURACION);
+                } else {
+                    gestionarRefrescoLCD();
+                }
+                break;
+        }
+    }
+
+private:
+    void transicionarA(AppEstado nuevoEstado) {
+        this->estadoActual = nuevoEstado;
+        Serial.print("\n[AppController] Transición a: ");
+        this->lcd->clear();
+
+        this->ultimoRefrescoLCD = millis(); // Reiniciar reloj de refresco
+
+        switch (nuevoEstado) {
+            case INICIALIZANDO:
+                Serial.println("INICIALIZANDO");
+                this->timer->detener();
+                this->animador->play(*this->animInicio, false);
+                
+                this->lcd->setCursor(0, 0); this->lcd->print("Hola!");
+                this->lcd->setCursor(0, 1); this->lcd->print("Soy Studino");
+                Serial.println("LCD: Hola!");
+                Serial.println("LCD: Soy Studino");
+                break;
+
+            case CONFIGURACION:
+                Serial.println("CONFIGURACION");
+                this->timer->detener();
+                this->animador->play(*this->animConfig, true);
+                
+                this->menuEstadoActual = CONFIG_ESTUDIO;
+                imprimirPantallaMenu();
+                break;
+
+            case SESION_ESTUDIO:
+                Serial.println("ESTUDIO");
+                this->duracionEstudioMS = (unsigned long)this->minutosEstudio * 60000UL;
+                
+                this->animador->play(*this->animEstudio, true);
+                this->timer->iniciar(this->duracionEstudioMS);
+                
+                imprimirTiempoLCD(this->duracionEstudioMS); // Imprimir tiempo inicial
+                break;
+
+            case SESION_PAUSA:
+                Serial.println("PAUSA");
+                this->duracionPausaMS = (unsigned long)this->minutosPausa * 60000UL;
+
+                this->animador->play(*this->animPausa, true);
+                this->timer->iniciar(this->duracionPausaMS);
+                
+                imprimirTiempoLCD(this->duracionPausaMS); // Imprimir tiempo inicial
+                break;
+        }
+    }
+
+    void gestionarMenuConfiguracion(bool btnSuma, bool btnResta, bool btnConfirma) {
+        bool cambioDePantalla = false;
+
+        switch (this->menuEstadoActual) {
+            case CONFIG_ESTUDIO:
+                if (btnSuma) {
+                    minutosEstudio = min(minutosEstudio + STEP_MIN, MAX_ESTUDIO_MIN);
+                    cambioDePantalla = true;
+                }
+                if (btnResta) {
+                    minutosEstudio = max(minutosEstudio - STEP_MIN, 5);
+                    cambioDePantalla = true;
+                }
+                if (btnConfirma) {
+                    this->menuEstadoActual = CONFIG_DESCANSO;
+                    cambioDePantalla = true;
+                }
+                break;
+            case CONFIG_DESCANSO:
+                if (btnSuma) {
+                    minutosPausa = min(minutosPausa + STEP_MIN, MAX_PAUSA_MIN);
+                    cambioDePantalla = true;
+                }
+                if (btnResta) {
+                    minutosPausa = max(minutosPausa - STEP_MIN, 5);
+                    cambioDePantalla = true;
+                }
+                if (btnConfirma) {
+                    this->menuEstadoActual = CONFIRMACION;
+                    cambioDePantalla = true;
+                }
+                break;
+            case CONFIRMACION:
+                if (btnSuma) { // "Si"
+                    transicionarA(SESION_ESTUDIO);
+                }
+                if (btnResta) { // "No"
+                    this->menuEstadoActual = CONFIG_ESTUDIO;
+                    cambioDePantalla = true;
+                }
+                break;
+        }
+        if (cambioDePantalla) {
+            imprimirPantallaMenu();
+        }
+    }
+
+    void imprimirPantallaMenu() {
+        this->lcd->clear();
+        this->lcd->setCursor(0, 0);
+        
+        switch (this->menuEstadoActual) {
+            case CONFIG_ESTUDIO:
+                this->lcd->print("Definir estudio ");
+                this->lcd->setCursor(0, 1);
+                this->lcd->print("   ");
+                this->lcd->print(minutosEstudio);
+                this->lcd->print(" min");
+                
+                Serial.println("LCD: Definir estudio ");
+                Serial.print("LCD:    "); Serial.print(minutosEstudio); Serial.println(" min");
+                break;
+            case CONFIG_DESCANSO:
+                this->lcd->print("Definir descanso");
+                this->lcd->setCursor(0, 1);
+                this->lcd->print("   ");
+                this->lcd->print(minutosPausa);
+                this->lcd->print(" min");
+                
+                Serial.println("LCD: Definir descanso");
+                Serial.print("LCD:    "); Serial.print(minutosPausa); Serial.println(" min");
+                break;
+            case CONFIRMACION:
+                this->lcd->print("Iniciar?");
+                this->lcd->setCursor(0, 1);
+                this->lcd->print("Si (Ver) No (Roj)");
+
+                Serial.println("LCD: Iniciar?");
+                Serial.println("LCD: Si (Ver) No (Roj)");
+                break;
+        }
+    }
+
+    void gestionarRefrescoLCD() {
+        unsigned long ahora = millis();
+        if (ahora - this->ultimoRefrescoLCD >= INTERVALO_REFRESCO_LCD_MS) {
+            unsigned long msRestantes = this->timer->getTiempoRestanteMS();
+            imprimirTiempoLCD(msRestantes);
+            this->ultimoRefrescoLCD = ahora;
+        }
+    }
+            
+    void imprimirTiempoLCD(unsigned long ms) {
+        long totalSegundos = (ms + 999) / 1000;
+        int minutos = totalSegundos / 60;
+        int segundos = totalSegundos % 60;
+        
+        this->lcd->clear();
+        this->lcd->setCursor(0, 0);
+        
+        if (this->estadoActual == SESION_ESTUDIO) {
+            this->lcd->print("Estudiando...");
+            Serial.println("LCD: Estudiando...");
+        } else {
+            this->lcd->print("Descansando...");
+            Serial.println("LCD: Descansando...");
+        }
+
+        this->lcd->setCursor(0, 1);
+        this->lcd->print("Tiempo: ");
+        
+        if (minutos < 10) this->lcd->print("0");
+        this->lcd->print(minutos);
+        this->lcd->print(":");
+        if (segundos < 10) this->lcd->print("0");
+        this->lcd->print(segundos);
+
+        Serial.print("LCD: Tiempo: ");
+        if (minutos < 10) Serial.print("0");
+        Serial.print(minutos);
+        Serial.print(":");
+        if (segundos < 10) Serial.print("0");
+        Serial.println(segundos);
+    }
+};
 
 
 byte animInicioData[6][8] = {
@@ -148,13 +451,13 @@ byte animInicioData[6][8] = {
     {B00000000,B01100010,B01000010,B01100010,B01000010,B01000010,B00000000,B00000000},
     {B00000000,B01100010,B01000010,B01100010,B01000010,B01000010,B00000000,B00000000}
 };
-byte animEngranaje[4][8] = {
-    {B00111100,B01100110,B11000011,B10011001,B10011001,B11000011,B01100110,B00111100},
-    {B00011000,B01011010,B01100110,B10011001,B01100110,B01011010,B00011000,B00000000},
-    {B00111100,B01100110,B11000011,B10011001,B10011001,B11000011,B01100110,B00111100},
-    {B00011000,B01011010,B01100110,B10011001,B01100110,B01011010,B00011000,B00000000}
+byte animEngranajeData[4][8] = {
+  {B00111100,B01100110,B11000011,B10011001,B10011001,B11000011,B01100110,B00111100},
+  {B00011000,B01011010,B01100110,B10011001,B01100110,B01011010,B00011000,B00000000},
+  {B00111100,B01100110,B11000011,B10011001,B10011001,B11000011,B01100110,B00111100},
+  {B00011000,B01011010,B01100110,B10011001,B01100110,B01011010,B00011000,B00000000}
 };
-byte animEstudio[16][8] = {
+byte animEstudioData[16][8] = {
     {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00001100,B00000000},
     {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000},
     {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000},
@@ -172,7 +475,7 @@ byte animEstudio[16][8] = {
     {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000},
     {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00000000,B00000000}
 };
-byte animPausa[8][8] = {
+byte animPausaData[8][8] = {
     {B01111110,B01000010,B01011010,B01011010,B01011010,B01000010,B01111110,B00000000},
     {B01111110,B01000010,B01010010,B01011010,B01011010,B01000010,B01111110,B00000000},
     {B01111110,B01000010,B01000010,B01011010,B01110010,B01000010,B01111110,B00000000},
@@ -183,276 +486,30 @@ byte animPausa[8][8] = {
     {B01111110,B01000010,B01111110,B01111110,B01000010,B01000010,B01111110,B00000000}
 };
 
-LedControl lc = LedControl(12, 11, 10, 1); // DIN, CLK, CS, numDevices
+
+Timer miTimer;
 LedAnimator miAnimador(lc, FRAME_DURATION_MS);
+
 Animation ANIM_INICIO    = { (const byte*)animInicioData, 6 };
-Animation ANIM_ENGRANAJE = { (const byte*)animEngranaje, 4 };
-Animation ANIM_ESTUDIO = { (const byte*)animEstudio, 16 };
-Animation ANIM_PAUSA   = { (const byte*)animPausa, 8 };
+Animation ANIM_ENGRANAJE = { (const byte*)animEngranajeData, 4 };
+Animation ANIM_ESTUDIO   = { (const byte*)animEstudioData, 16 };
+Animation ANIM_PAUSA     = { (const byte*)animPausaData, 8 };
 
-
-class AppController {
-public:
-    enum AppEstado {
-        INICIALIZANDO,
-        CONFIGURACION,
-        ESTUDIO,
-        PAUSA
-    };
-
-private:
-    AppEstado estadoActual;
-
-    Timer* timer;
-    LedAnimator* animador;
-
-    unsigned long duracionEstudioMS;
-    unsigned long duracionPausaMS;
-
-public:
-    AppController(Timer& timer, LedAnimator& animador, unsigned long estudioMS, unsigned long pausaMS) {
-        this->timer = &timer;
-        this->animador = &animador;
-        this->duracionEstudioMS = estudioMS;
-        this->duracionPausaMS = pausaMS;
-        
-        this->estadoActual = INICIALIZANDO; // Estado inicial por defecto
-    }
-
-    void iniciar() {
-        transicionarA(INICIALIZANDO);
-    }
-    
-    void iniciarSesionEstudio() {
-        if (this->estadoActual == CONFIGURACION) {
-            transicionarA(ESTUDIO);
-        }
-    }
-
-    void actualizar() {
-        this->animador->actualizar();
-        bool timerHaTerminado = this->timer->actualizar();
-
-        switch (this->estadoActual) {
-            case INICIALIZANDO:
-                if (!this->animador->isRunning()) {
-                    transicionarA(CONFIGURACION);
-                }
-                break;
-            
-            case CONFIGURACION:
-                break;
-
-            case ESTUDIO:
-                if (timerHaTerminado) {
-                    transicionarA(PAUSA);
-                }
-                break;
-
-            case PAUSA:
-                if (timerHaTerminado) {
-                    transicionarA(ESTUDIO);
-                }
-                break;
-        }
-    }
-
-private:
-    void transicionarA(AppEstado nuevoEstado) {
-        this->estadoActual = nuevoEstado;
-        Serial.print("\n[AppController] Transición a: ");
-
-        switch (nuevoEstado) {
-            case INICIALIZANDO:
-                Serial.println("INICIALIZANDO");
-                this->timer->detener();
-                this->animador->play(ANIM_INICIO, false); // false = NO loop
-                break;
-            
-            case CONFIGURACION:
-                Serial.println("CONFIGURACION");
-                this->timer->detener();
-                this->animador->play(ANIM_ENGRANAJE, true);
-                break;
-
-            case ESTUDIO:
-                Serial.println("ESTUDIO");
-                this->animador->play(ANIM_ESTUDIO, true);
-                this->timer->iniciar(this->duracionEstudioMS);
-                break;
-
-            case PAUSA:
-                Serial.println("PAUSA");
-                this->animador->play(ANIM_PAUSA, true);
-                this->timer->iniciar(this->duracionPausaMS);
-                break;
-        }
-    }
-};
-
-unsigned long DURACION_ESTUDIO_MS   =  25 * 60000UL; // 25 min por defecto
-unsigned long DURACION_PAUSA_MS     = 5 * 60000UL; // 5 min por defecto
-const unsigned long INTERVALO_REFRESCO_MS = 1000UL;  // 1 seg
-
-int minutosEstudio = DURACION_ESTUDIO_MS / 60000UL; // 0 si < 1 min
-int minutosPausa   = DURACION_PAUSA_MS / 60000UL;
-
-const unsigned int MAX_ESTUDIO_MIN = 60;
-const unsigned int MAX_PAUSA_MIN   = 30;
-const unsigned int STEP_MIN        = 5; // -5 / +5 min
-
-const int PIN_VERDE = 7;  // Suma
-const int PIN_ROJO  = 6;  // Resta
-const int PIN_NEGRO = 5;  // Confirmar
-
-
-AppController app(miTimer, miAnimador, DURACION_ESTUDIO_MS, FRAME_DURATION_MS);
-
-
-enum MenuState { 
-  SALUDO, 
-  CONFIG_ESTUDIO, 
-  CONFIG_DESCANSO, 
-  CONFIRMACION, 
-  FINALIZADO 
-};
-
-const unsigned long DEBOUNCE_MS = 200; // tiempo mínimo entre lecturas
-unsigned long lastVerde = 0;
-unsigned long lastRojo  = 0;
-unsigned long lastNegro = 0;
-
-void menuInicio() {
-  MenuState estado = SALUDO;
-
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Hola!");
-  lcd.setCursor(0, 1);
-  lcd.print("Soy Studino");
-  unsigned long inicioSaludo = millis();
-  while (millis() - inicioSaludo < 2500) {}
-  lcd.clear();
-
-  estado = CONFIG_ESTUDIO;
-
-  while (estado != FINALIZADO) {
-    unsigned long ahora = millis();
-
-    switch (estado) {
-
-      // --- CONFIGURAR ESTUDIO ---
-      case CONFIG_ESTUDIO:
-        lcd.setCursor(0, 0);
-        lcd.print("Definir estudio ");
-        lcd.setCursor(0, 1);
-        lcd.print("   ");
-        lcd.print(minutosEstudio);
-        lcd.print(" min   ");
-        
-        if (digitalRead(PIN_VERDE) == LOW && ahora - lastVerde > DEBOUNCE_MS) {
-          minutosEstudio = min(minutosEstudio + STEP_MIN, MAX_ESTUDIO_MIN);
-          lastVerde = ahora;
-        }
-        if (digitalRead(PIN_ROJO) == LOW && ahora - lastRojo > DEBOUNCE_MS) {
-          minutosEstudio = max(minutosEstudio - STEP_MIN, 5); // mínimo 5 min
-          lastRojo = ahora;
-        }
-        if (digitalRead(PIN_NEGRO) == LOW && ahora - lastNegro > DEBOUNCE_MS) {
-          lcd.clear();
-          estado = CONFIG_DESCANSO;
-          lastNegro = ahora;
-        }
-        break;
-
-      // --- CONFIGURAR DESCANSO ---
-      case CONFIG_DESCANSO:
-        lcd.setCursor(0, 0);
-        lcd.print("Definir descanso");
-        lcd.setCursor(0, 1);
-        lcd.print("   ");
-        lcd.print(minutosPausa);
-        lcd.print(" min   ");
-
-        if (digitalRead(PIN_VERDE) == LOW && ahora - lastVerde > DEBOUNCE_MS) {
-          minutosPausa = min(minutosPausa + STEP_MIN, 60);
-          lastVerde = ahora;
-        }
-        if (digitalRead(PIN_ROJO) == LOW && ahora - lastRojo > DEBOUNCE_MS) {
-          minutosPausa = max(minutosPausa - STEP_MIN, 5); // mínimo 5 min
-          lastRojo = ahora;
-        }
-        if (digitalRead(PIN_NEGRO) == LOW && ahora - lastNegro > DEBOUNCE_MS) {
-          lcd.clear();
-          estado = CONFIRMACION;
-          lastNegro = ahora;
-        }
-        break;
-
-      // --- CONFIRMAR ---
-      case CONFIRMACION:
-        lcd.setCursor(0, 0);
-        lcd.print("Iniciar?");
-        lcd.setCursor(0, 1);
-        lcd.print("Si    No");
-
-        if (digitalRead(PIN_VERDE) == LOW && ahora - lastVerde > DEBOUNCE_MS) {
-          estado = FINALIZADO;
-          lastVerde = ahora;
-        }
-        if (digitalRead(PIN_ROJO) == LOW && ahora - lastRojo > DEBOUNCE_MS) {
-          lcd.clear();
-          estado = CONFIG_ESTUDIO; // volver atrás
-          lastRojo = ahora;
-        }
-        break;
-
-      default:
-        break;
-    }
-  }
-
-  // Cuando termina el menú, convertimos minutos → milisegundos
-  DURACION_ESTUDIO_MS = (unsigned long) minutosEstudio * 60000UL;
-  DURACION_PAUSA_MS   = (unsigned long) minutosPausa   * 60000UL;
-
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Listo!");
-  lcd.setCursor(0, 1);
-  lcd.print("Comenzando...");
-  unsigned long inicioListo = millis();
-  while (millis() - inicioListo < 1500) {}
-}
+AppController app(miTimer, miAnimador, lcd,
+                  PIN_VERDE, PIN_ROJO, PIN_NEGRO,
+                  DURACION_ESTUDIO_MS_DEFECTO, DURACION_PAUSA_MS_DEFECTO,
+                  ANIM_INICIO, ANIM_ENGRANAJE, ANIM_ESTUDIO, ANIM_PAUSA);
 
 
 void setup() {
     Serial.begin(9600);
-    lcd.init();
-    lcd.backlight();
-    
-    Serial.println("--- Bienvenido a Studino! Tu compañero de estudio :) ---");
+    Serial.println("--- Studino v3.2 (Cancelar y Debug) ---");
 
-    pinMode(PIN_VERDE, INPUT_PULLUP);
-    pinMode(PIN_ROJO, INPUT_PULLUP);
-    pinMode(PIN_NEGRO, INPUT_PULLUP);
-
-
-    // Inicializar la matriz LED
     lc.shutdown(0,false); 
     lc.setIntensity(0,8);
     lc.clearDisplay(0); 
 
     app.iniciar();
-
-    menuInicio(); // Menú para ajustar los tiempos
-
-    // Convertir minutos a ms y pasar al timer
-    miTimer.setDuraciones(DURACION_ESTUDIO_MS, DURACION_PAUSA_MS);
-    miTimer.iniciar();
-    miAnimador.play(ANIM_INICIO);
-
-    app.iniciarSesionEstudio();
 }
 
 void loop() {
