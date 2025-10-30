@@ -8,6 +8,7 @@ LedControl lc = LedControl(12, 11, 10, 1); // DIN, CLK, CS, numDevices
 const int PIN_VERDE = 7; // Suma / "Si"
 const int PIN_ROJO  = 6; // Resta / "No"
 const int PIN_NEGRO = 5; // Confirmar / Cancelar
+const int BUZZER_PIN = 3;
 
 unsigned long DURACION_ESTUDIO_MS_DEFECTO = 70000UL;
 unsigned long DURACION_PAUSA_MS_DEFECTO   = 70000UL;
@@ -167,16 +168,19 @@ private:
     int minutosEstudio;
     int minutosPausa;
 
-    int pinSuma, pinResta, pinConfirma;
+    int pinSuma, pinResta, pinConfirma, pinBuzzer;
     unsigned long lastSuma, lastResta, lastConfirma;
 
     const Animation *animInicio, *animConfig, *animEstudio, *animPausa;
 
     unsigned long ultimoRefrescoLCD;
 
+    unsigned long pitidoStartTime;
+    unsigned long pitidoDuration;
+
 public:
     AppController(Timer& timer, LedAnimator& animador, LiquidCrystal_I2C& lcd,
-                  int pinSuma, int pinResta, int pinConfirma,
+                  int pinSuma, int pinResta, int pinConfirma, int pinBuzzer,
                   unsigned long estudioDefectoMS, unsigned long pausaDefectoMS,
                   const Animation& animInicio, const Animation& animConfig,
                   const Animation& animEstudio, const Animation& animPausa) {
@@ -188,6 +192,7 @@ public:
         this->pinSuma = pinSuma;
         this->pinResta = pinResta;
         this->pinConfirma = pinConfirma;
+        this->pinBuzzer = pinBuzzer;
 
         this->duracionEstudioMS = estudioDefectoMS;
         this->duracionPausaMS = pausaDefectoMS;
@@ -205,12 +210,17 @@ public:
         
         this->lastSuma = 0; this->lastResta = 0; this->lastConfirma = 0;
         this->ultimoRefrescoLCD = 0;
+
+        this->pitidoStartTime = 0;
+        this->pitidoDuration = 0;
     }
 
     void iniciar() {
         pinMode(pinSuma, INPUT_PULLUP);
         pinMode(pinResta, INPUT_PULLUP);
         pinMode(pinConfirma, INPUT_PULLUP);
+        pinMode(pinBuzzer, OUTPUT); 
+        digitalWrite(pinBuzzer, LOW);
         
         this->lcd->init();
         this->lcd->backlight();
@@ -220,6 +230,7 @@ public:
 
     void actualizar() {
         this->animador->actualizar();
+        gestionarPitido();
         bool timerHaTerminado = this->timer->actualizar();
 
         unsigned long ahora = millis();
@@ -271,7 +282,7 @@ private:
         Serial.print("\n[AppController] Transición a: ");
         this->lcd->clear();
 
-        this->ultimoRefrescoLCD = millis(); // Reiniciar reloj de refresco
+        this->ultimoRefrescoLCD = millis(); // Reiniciar reloj
 
         switch (nuevoEstado) {
             case INICIALIZANDO:
@@ -298,21 +309,40 @@ private:
                 Serial.println("ESTUDIO");
                 this->duracionEstudioMS = (unsigned long)this->minutosEstudio * 60000UL;
                 
+                iniciarPitido(300);
+
                 this->animador->play(*this->animEstudio, true);
                 this->timer->iniciar(this->duracionEstudioMS);
                 
-                imprimirTiempoLCD(this->duracionEstudioMS); // Imprimir tiempo inicial
+                imprimirTiempoLCD(this->duracionEstudioMS);
                 break;
 
             case SESION_PAUSA:
                 Serial.println("PAUSA");
                 this->duracionPausaMS = (unsigned long)this->minutosPausa * 60000UL;
 
+                iniciarPitido(600);
+
                 this->animador->play(*this->animPausa, true);
                 this->timer->iniciar(this->duracionPausaMS);
                 
-                imprimirTiempoLCD(this->duracionPausaMS); // Imprimir tiempo inicial
+                imprimirTiempoLCD(this->duracionPausaMS);
                 break;
+        }
+    }
+
+    void iniciarPitido(unsigned long duration) {
+        this->pitidoDuration = duration;
+        this->pitidoStartTime = millis();
+        digitalWrite(this->pinBuzzer, HIGH);
+    }
+
+    void gestionarPitido() {
+        if (this->pitidoStartTime != 0) {
+            if (millis() - this->pitidoStartTime >= this->pitidoDuration) {
+                digitalWrite(this->pinBuzzer, LOW);
+                this->pitidoStartTime = 0; 
+            }
         }
     }
 
@@ -452,10 +482,10 @@ byte animInicioData[6][8] = {
     {B00000000,B01100010,B01000010,B01100010,B01000010,B01000010,B00000000,B00000000}
 };
 byte animEngranajeData[4][8] = {
-  {B00111100,B01100110,B11000011,B10011001,B10011001,B11000011,B01100110,B00111100},
-  {B00011000,B01011010,B01100110,B10011001,B01100110,B01011010,B00011000,B00000000},
-  {B00111100,B01100110,B11000011,B10011001,B10011001,B11000011,B01100110,B00111100},
-  {B00011000,B01011010,B01100110,B10011001,B01100110,B01011010,B00011000,B00000000}
+    {B00111100,B01100110,B11000011,B10011001,B10011001,B11000011,B01100110,B00111100},
+    {B00011000,B01011010,B01100110,B10011001,B01100110,B01011010,B00011000,B00000000},
+    {B00111100,B01100110,B11000011,B10011001,B10011001,B11000011,B01100110,B00111100},
+    {B00011000,B01011010,B01100110,B10011001,B01100110,B01011010,B00011000,B00000000}
 };
 byte animEstudioData[16][8] = {
     {B00000000,B00000000,B01000010,B00000000,B01000010,B01111110,B00001100,B00000000},
@@ -496,14 +526,14 @@ Animation ANIM_ESTUDIO   = { (const byte*)animEstudioData, 16 };
 Animation ANIM_PAUSA     = { (const byte*)animPausaData, 8 };
 
 AppController app(miTimer, miAnimador, lcd,
-                  PIN_VERDE, PIN_ROJO, PIN_NEGRO,
+                  PIN_VERDE, PIN_ROJO, PIN_NEGRO, BUZZER_PIN,
                   DURACION_ESTUDIO_MS_DEFECTO, DURACION_PAUSA_MS_DEFECTO,
                   ANIM_INICIO, ANIM_ENGRANAJE, ANIM_ESTUDIO, ANIM_PAUSA);
 
 
 void setup() {
     Serial.begin(9600);
-    Serial.println("--- Studino v3.2 (Cancelar y Debug) ---");
+    Serial.println("--- Buenvenido a Studino! ---");
 
     lc.shutdown(0,false); 
     lc.setIntensity(0,8);
