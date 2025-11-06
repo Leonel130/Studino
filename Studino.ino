@@ -13,8 +13,8 @@ const int BUZZER_PIN = 3;
 const int PIN_TRIG = 8; // Pin Trigger del sensor
 const int PIN_ECHO = 9; // Pin Echo del sensor
 
-unsigned long DURACION_ESTUDIO_MS_DEFECTO = 1 * 60000UL;
-unsigned long DURACION_PAUSA_MS_DEFECTO   = 1 * 60000UL;
+unsigned long DURACION_ESTUDIO_MS_DEFECTO = 25 * 60000UL;
+unsigned long DURACION_PAUSA_MS_DEFECTO   = 5 * 60000UL;
 const unsigned long FRAME_DURATION_MS     = 800UL;
 
 const unsigned int MAX_ESTUDIO_MIN = 60;
