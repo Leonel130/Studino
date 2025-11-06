@@ -424,7 +424,7 @@ private:
                 this->lcd->print("Si (Ver) No (Roj)");
 
                 Serial.println("LCD: Iniciar?");
-                Serial.println("LCD: Si (Ver) No (Roj)");
+                Serial.println("LCD: Si    No");
                 break;
         }
     }
