@@ -8,11 +8,9 @@ Requerimientos de hardware
 - Protoboard
 - Arduino Uno
 
-!(images/20251106_192512.webp)[images/20251106_192512.webp]
+![images/20251106_192512.webp](images/20251106_192512.webp)
 
+![images/20251106_192533.webp](images/20251106_192533.webp)
 
-!(images/20251106_192533.webp)[images/20251106_192533.webp]
-
-
-!(images/20251106_192800.webp)[images/20251106_192800.webp]
+![images/20251106_192800.webp](images/20251106_192800.webp)
 
