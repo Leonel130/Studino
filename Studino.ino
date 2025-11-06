@@ -421,7 +421,7 @@ private:
             case CONFIRMACION:
                 this->lcd->print("Iniciar?");
                 this->lcd->setCursor(0, 1);
-                this->lcd->print("Si (Ver) No (Roj)");
+                this->lcd->print("Si    No");
 
                 Serial.println("LCD: Iniciar?");
                 Serial.println("LCD: Si    No");
